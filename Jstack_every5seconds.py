@@ -5,8 +5,8 @@ iteration = 0
 while True:
     if(iteration == 60):
         break
-    else:
-        
+    
+    else:  
         
         Outputfile = 'jstack_' + time.strftime("%m%d-%H%M%S")
 # Jstack on Java pid
