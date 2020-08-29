@@ -1,0 +1,101 @@
+# Databricks notebook source
+# This notebook only needs a token and workspaceURL to trigger delete for all running clusters and appends to Audit table to be able to go back and check at a later point.
+dbutils.widgets.text("Token", " ")
+dbutils.widgets.text("WorkspaceURL", " ")
+Token = (dbutils.widgets.get("Token"))
+WorkspaceURL = (dbutils.widgets.get("WorkspaceURL"))
+
+# COMMAND ----------
+
+## Some regex to extract workspaceId and region
+import re
+x = re.search("[a-z]*:\/\/[a-z]*2.[a-z]*.[a-z]*", WorkspaceURL)
+Region = x.group()
+print (Region)
+y= re.search("\d*$", WorkspaceURL)
+WorkspaceId = y.group()
+print(WorkspaceId)
+
+# COMMAND ----------
+
+#Import required modules
+import requests
+import json
+import os
+from datetime import datetime
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from pyspark.sql import DataFrame
+from delta.tables import *
+now = datetime.now()
+#For cluster list URL
+apiEndpoint = Region + "/api/2.0/clusters/list"
+#Pass header for Rest call
+headers={'Authorization': "Bearer " + Token, 'Accept':"application/json"}
+
+# COMMAND ----------
+
+### Finding all the running clusters
+ClusterList =  requests.get(apiEndpoint , headers=headers).json()
+### Json output in more readable format
+#testjson = json.dumps(ClusterList, indent=2)
+#print(testjson)
+Cluster_List = ClusterList['clusters']
+Running_Clusters  = []
+for clusters in Cluster_List:
+# Create an list of running cluster Id's
+  if clusters['state'] == "RUNNING":
+              Running_Clusters.append(clusters['cluster_id'])      
+
+# COMMAND ----------
+
+## Table for auditting
+# Create schema of the Table
+schema = StructType([
+  StructField('DateTime', DateType(), True),
+  StructField('WorkspaceId', StringType(), True),
+  StructField('Cluster_ID', StringType(), True)
+])
+
+##  ?
+
+ClusterTermination_obj = [dict({
+  'DateTime': now,
+  'WorkspaceId' : WorkspaceId,
+  'Cluster_ID': Running_Clusters
+})]
+
+# COMMAND ----------
+
+## Create a DF
+ClusterTermination_df = (
+  spark.createDataFrame(ClusterTermination_obj, schema)
+)
+display(ClusterTermination_df)
+
+# COMMAND ----------
+
+## Create Delta path and appent records in DF with latest run to the table
+DeltaTablePath = "/mnt/delta/ShutdownDefaulterWorkspaceClusters/"
+ClusterTermination_df.write.mode("append").format("delta").save(DeltaTablePath)
+
+# COMMAND ----------
+
+# MAGIC %fs ls /mnt/delta/ShutdownDefaulterWorkspaceClusters/
+
+# COMMAND ----------
+
+sqlCmd = "SELECT * FROM delta.`{}` ".format(DeltaTablePath)
+display(spark.sql(sqlCmd))
+
+# COMMAND ----------
+
+### Delete all the running cluster
+DeleteApiEndpoint = Region + "/api/2.0/clusters/start"
+for SampleClusters in Running_Clusters:
+  
+  Clusters_ToBeDeleted = json.dumps({ "cluster_id":SampleClusters })
+## Delete all the running clusters in a loop
+  Cluster_Deleted = requests.post(DeleteApiEndpoint ,data = Clusters_ToBeDeleted , headers=headers).text
+  print(Cluster_Deleted)
+
